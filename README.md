@@ -44,6 +44,10 @@ policy but receives `403`.
 
 ## Verification evidence
 
+The complete evidence package, including explicit PASS statuses and the direct
+local Supabase/Auth results, is in
+[`VERIFICATION_EVIDENCE.md`](./VERIFICATION_EVIDENCE.md).
+
 ### Replit automated suite
 
 The checked-in test suite uses a local fake provider and does not contact
@@ -58,18 +62,29 @@ missing and malformed headers, invalid and expired tokens, valid protected
 access, authorization denial and success, logout, and the OpenAPI security
 declaration.
 
-The Replit automated suite passed **15 tests** using that fake provider.
+The Replit automated suite passed **15 tests** using that fake provider, with
+one non-failing TestClient/HTTPX deprecation warning.
 
-### Independent local artifact suite
+### Genuine local Supabase runtime
 
-The independent local artifact suite passed **23 tests** against the official
-Supabase CLI local Auth stack. This was a local-only verification using a
-temporary `/tmp` project and process-scoped configuration; it did not use a
-hosted Supabase account or committed secrets.
+The genuine local runtime verification used the official Supabase CLI with a
+temporary `/tmp` project and a minimal Postgres, GoTrue/Auth, and Kong stack.
+The CLI health check was ignored because its Auth/Kong health classification was
+misleading even while the services were reachable. No hosted Supabase account
+or committed secrets were used.
 
-The genuine end-to-end sequence was run through the FastAPI app and produced:
+Direct Supabase Auth results:
 
-- `GET /healthz` → `200`, with `supabase_configured: true`
+- settings → `200`
+- signup → `200`
+- password login → `200`
+- authenticated user lookup → `200`, with the same identity as signup/login
+- logout → `204`
+- settings after logout → `200`; Auth remained reachable
+
+Application-level results:
+
+- `GET /healthz` → `200`, with Supabase configured
 - `POST /auth/signup` → `201`
 - `POST /auth/login` → `200`
 - `GET /auth/me` with the returned Bearer token → `200`
@@ -80,6 +95,9 @@ The genuine end-to-end sequence was run through the FastAPI app and produced:
 - `GET /openapi.json` → `200`, with the `BearerAuth` HTTP bearer scheme
 
 The signup, login, and protected identity responses resolved to the same user.
-No hosted Supabase verification is claimed. With no settings, the service
-still starts and `/healthz` reports `supabase_configured: false`; live auth
-calls return `503` rather than silently using fake data.
+
+### Separate preserved local AI artifact
+
+The separate preserved local AI artifact reported **23 tests passed**. This is
+not the Replit workspace's automated suite and is not being presented as
+additional local-Supabase runtime evidence.

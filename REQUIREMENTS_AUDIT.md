@@ -13,7 +13,7 @@
 | Swagger/OpenAPI auth | `HTTPBearer(scheme_name="BearerAuth")` produces the security scheme and Swagger lock control. |
 | Secrets out of source control | `.env` and `.env.*` are ignored; only `.env.example` is tracked. |
 | Automated tests | `artifacts/web/tests/test_auth.py` uses a fake provider and covers each requested flow without live secrets. |
-| README and evidence | `README.md` documents the API, commands, modern/legacy key behavior, and the separate mocked versus genuine local-runtime evidence. |
+| README and evidence | `README.md` and `VERIFICATION_EVIDENCE.md` document the API, commands, modern/legacy key behavior, explicit PASS statuses, automated-test output, and separate direct/app-level local-runtime evidence. |
 
 ## Dependency audit
 
@@ -30,12 +30,14 @@ needed for this assignment.
 
 ## Verification record
 
-- Replit automated suite: **15 tests passed** using the fake provider.
-- Independent local artifact suite: **23 tests passed** against the official
-  Supabase CLI local Auth stack.
-- Genuine local app sequence: signup `201`, login `200`, protected
-  `/auth/me` `200`, missing/malformed/invalid token `401`, authenticated
-  non-admin `admin-check` `403`, logout `200`, token reuse after logout `401`,
-  and OpenAPI Bearer security verified.
-- No hosted Supabase account or committed secret was used for the local
-  verification.
+See [`VERIFICATION_EVIDENCE.md`](./VERIFICATION_EVIDENCE.md) for the complete
+evidence package. The final status is:
+
+- Implementation: **PASS**
+- Replit automated suite: **PASS** — 15 passed, one non-failing
+  TestClient/HTTPX deprecation warning
+- Genuine local Supabase integration: **PASS** — direct Auth and
+  application-level results recorded separately
+- Separate preserved local AI artifact: **23 tests passed**, intentionally not
+  counted as part of this Replit workspace's 15-test suite
+- No hosted Supabase account or committed secret was used
