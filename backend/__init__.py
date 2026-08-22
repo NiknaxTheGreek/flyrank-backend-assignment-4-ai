@@ -1,0 +1,1 @@
+"""FlyRank Assignment 4 FastAPI service."""

@@ -1,0 +1,33 @@
+kind = "web"
+previewPath = "/"
+title = "FlyRank Auth Assignment"
+description = "A minimal FlyRank Backend Assignment 4 project with a React client and Python FastAPI authentication service using Supabase Auth."
+version = "1.0.0"
+id = "artifacts/web"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 22333
+
+[services.development]
+run = "pnpm --filter @workspace/web run dev"
+
+[services.production]
+
+[services.production.build]
+args = ["sh", "-c", "uv sync --frozen && pnpm --filter @workspace/web run build"]
+
+[services.production.run]
+args = ["sh", "-c", "uv run --project . uvicorn backend.main:app --app-dir artifacts/web --host 0.0.0.0 --port 22333"]
+
+[services.production.run.env]
+PORT = "22333"
+
+[services.production.health.startup]
+path = "/healthz"
+
+[services.env]
+PORT = "22333"
+BASE_PATH = "/"
