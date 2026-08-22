@@ -44,10 +44,10 @@ class SupabaseAuthClient:
         if not settings.is_supabase_configured:
             raise SupabaseConfigurationError(
                 "Supabase Auth is not configured. Set SUPABASE_URL and "
-                "SUPABASE_ANON_KEY."
+                "SUPABASE_PUBLISHABLE_KEY (or legacy SUPABASE_ANON_KEY)."
             )
         self._base_url = settings.supabase_url.rstrip("/")
-        self._anon_key = settings.supabase_anon_key.get_secret_value()
+        self._api_key = settings.supabase_api_key.get_secret_value()
         self._timeout = timeout_seconds
 
     def _request(
@@ -59,7 +59,7 @@ class SupabaseAuthClient:
         json: Mapping[str, Any] | None = None,
     ) -> Mapping[str, Any]:
         headers = {
-            "apikey": self._anon_key,
+            "apikey": self._api_key,
             "Content-Type": "application/json",
         }
         if access_token:

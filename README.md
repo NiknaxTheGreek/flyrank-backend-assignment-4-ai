@@ -7,9 +7,11 @@ authentication (`401`) and authorization (`403`).
 
 ## Run locally
 
-The checked-in `.env.example` documents the only live Supabase settings. Keep
-real values in Replit Secrets or an ignored local `.env`; do not place them in
-source control.
+The checked-in `.env.example` documents the live Supabase settings. Set
+`SUPABASE_PUBLISHABLE_KEY` for modern Supabase projects; the legacy
+`SUPABASE_ANON_KEY` remains supported as a fallback when no publishable key is
+provided. Keep real values in Replit Secrets or an ignored local `.env`; do not
+place them in source control.
 
 ```bash
 # Install/sync the pinned Python dependencies
@@ -42,7 +44,10 @@ policy but receives `403`.
 
 ## Verification evidence
 
-The test suite uses a local fake provider and does not contact Supabase:
+### Replit automated suite
+
+The checked-in test suite uses a local fake provider and does not contact
+Supabase:
 
 ```text
 uv run pytest artifacts/web/tests -q
@@ -53,14 +58,28 @@ missing and malformed headers, invalid and expired tokens, valid protected
 access, authorization denial and success, logout, and the OpenAPI security
 declaration.
 
-The most recent local verification produced `15 passed` using that fake
-provider. The running app also returned `200` from `/healthz` with
-`supabase_configured: false`, returned `401` plus `WWW-Authenticate: Bearer`
-for a protected request with no token, and exposed the `BearerAuth` security
-scheme from `/openapi.json`.
+The Replit automated suite passed **15 tests** using that fake provider.
 
-No live Supabase verification is claimed unless real settings are intentionally
-configured in the environment and the endpoint is exercised manually. With no
-settings, the service still starts and `/healthz` reports
-`supabase_configured: false`; live auth calls return `503` rather than silently
-using fake data.
+### Independent local artifact suite
+
+The independent local artifact suite passed **23 tests** against the official
+Supabase CLI local Auth stack. This was a local-only verification using a
+temporary `/tmp` project and process-scoped configuration; it did not use a
+hosted Supabase account or committed secrets.
+
+The genuine end-to-end sequence was run through the FastAPI app and produced:
+
+- `GET /healthz` → `200`, with `supabase_configured: true`
+- `POST /auth/signup` → `201`
+- `POST /auth/login` → `200`
+- `GET /auth/me` with the returned Bearer token → `200`
+- Missing, malformed, and invalid Bearer tokens → `401`
+- Authenticated non-admin `GET /auth/admin-check` → `403`
+- `POST /auth/logout` → `200`
+- Reusing the token after logout → `401`
+- `GET /openapi.json` → `200`, with the `BearerAuth` HTTP bearer scheme
+
+The signup, login, and protected identity responses resolved to the same user.
+No hosted Supabase verification is claimed. With no settings, the service
+still starts and `/healthz` reports `supabase_configured: false`; live auth
+calls return `503` rather than silently using fake data.

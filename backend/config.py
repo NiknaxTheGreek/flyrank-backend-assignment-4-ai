@@ -11,6 +11,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="SUPABASE_URL",
     )
+    supabase_publishable_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="SUPABASE_PUBLISHABLE_KEY",
+    )
     supabase_anon_key: SecretStr | None = Field(
         default=None,
         validation_alias="SUPABASE_ANON_KEY",
@@ -22,8 +26,13 @@ class Settings(BaseSettings):
     )
 
     @property
+    def supabase_api_key(self) -> SecretStr | None:
+        """Prefer modern publishable keys while accepting legacy anon keys."""
+        return self.supabase_publishable_key or self.supabase_anon_key
+
+    @property
     def is_supabase_configured(self) -> bool:
-        return bool(self.supabase_url and self.supabase_anon_key)
+        return bool(self.supabase_url and self.supabase_api_key)
 
 
 @lru_cache
