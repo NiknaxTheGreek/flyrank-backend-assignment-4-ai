@@ -14,14 +14,15 @@ provided. Keep real values in Replit Secrets or an ignored local `.env`; do not
 place them in source control.
 
 ```bash
-# Install/sync the pinned Python dependencies
+# Install/sync the pinned dependencies
 uv sync
+pnpm install --frozen-lockfile
 
 # Run the local fake-backed tests
-uv run pytest artifacts/web/tests -q
+uv run pytest tests -q
 
 # Run the web artifact (builds the React shell, then serves it from FastAPI)
-pnpm --filter @workspace/web run dev
+pnpm run dev
 ```
 
 When the web artifact is running, inspect:
@@ -54,7 +55,7 @@ The checked-in test suite uses a local fake provider and does not contact
 Supabase:
 
 ```text
-uv run pytest artifacts/web/tests -q
+uv run pytest tests -q
 ```
 
 Those tests cover signup success/failure, login success/invalid credentials,

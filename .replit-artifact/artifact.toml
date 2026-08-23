@@ -12,15 +12,15 @@ paths = [ "/" ]
 localPort = 22333
 
 [services.development]
-run = "pnpm --filter @workspace/web run dev"
+run = "pnpm run dev"
 
 [services.production]
 
 [services.production.build]
-args = ["sh", "-c", "uv sync --frozen && pnpm --filter @workspace/web run build"]
+args = ["sh", "-c", "uv sync --frozen && pnpm run build"]
 
 [services.production.run]
-args = ["sh", "-c", "uv run --project . uvicorn backend.main:app --app-dir artifacts/web --host 0.0.0.0 --port 22333"]
+args = ["sh", "-c", "uv run --project . uvicorn backend.main:app --app-dir . --host 0.0.0.0 --port 22333"]
 
 [services.production.run.env]
 PORT = "22333"
