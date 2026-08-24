@@ -14,7 +14,7 @@ permissions:
 jobs:
   test-auth-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Check out repository
@@ -32,3 +32,148 @@ jobs:
 
       - name: Run Assignment 4 tests
         run: python -m pytest -q
+
+      - name: Prove curl auth flow against current API contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/a4-evidence
+          python tools/swagger_evidence_server.py > /tmp/a4-evidence/server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+
+          for attempt in {1..80}; do
+            if curl -fsS http://127.0.0.1:8040/public/info >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.1
+          done
+
+          curl -sS -D /tmp/a4-evidence/public.headers \
+            http://127.0.0.1:8040/public/info \
+            -o /tmp/a4-evidence/public.json
+
+          curl -sS -D /tmp/a4-evidence/signup.headers \
+            -H 'content-type: application/json' \
+            -d '{"email":"person@example.com","password":"correct-password"}' \
+            http://127.0.0.1:8040/auth/signup \
+            -o /tmp/a4-evidence/signup.json
+
+          curl -sS -D /tmp/a4-evidence/login.headers \
+            -H 'content-type: application/json' \
+            -d '{"email":"person@example.com","password":"correct-password"}' \
+            http://127.0.0.1:8040/auth/login \
+            -o /tmp/a4-evidence/login.json
+
+          TOKEN=$(python - <<'PY'
+          import json
+          print(json.load(open('/tmp/a4-evidence/login.json'))['access_token'])
+          PY
+          )
+
+          curl -sS -D /tmp/a4-evidence/profile.headers \
+            -H "Authorization: Bearer $TOKEN" \
+            http://127.0.0.1:8040/protected/profile \
+            -o /tmp/a4-evidence/profile.json
+
+          curl -sS -D /tmp/a4-evidence/dashboard.headers \
+            -H "Authorization: Bearer $TOKEN" \
+            http://127.0.0.1:8040/protected/dashboard \
+            -o /tmp/a4-evidence/dashboard.json
+
+          curl -sS -D /tmp/a4-evidence/invalid-token.headers \
+            -H 'Authorization: Bearer invalid-token' \
+            http://127.0.0.1:8040/protected/profile \
+            -o /tmp/a4-evidence/invalid-token.json
+
+          python - <<'PY'
+          from pathlib import Path
+
+          def status(path):
+              first = Path(path).read_text().splitlines()[0]
+              return int(first.split()[1])
+
+          assert status('/tmp/a4-evidence/public.headers') == 200
+          assert status('/tmp/a4-evidence/signup.headers') == 201
+          assert status('/tmp/a4-evidence/login.headers') == 200
+          assert status('/tmp/a4-evidence/profile.headers') == 200
+          assert status('/tmp/a4-evidence/dashboard.headers') == 200
+          assert status('/tmp/a4-evidence/invalid-token.headers') == 401
+          print('A4_CURL_AUTH_FLOW=PASS')
+          PY
+
+          curl -sS -D /tmp/a4-evidence/logout.headers \
+            -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            http://127.0.0.1:8040/auth/logout \
+            -o /tmp/a4-evidence/logout.body
+
+          curl -sS -D /tmp/a4-evidence/reuse.headers \
+            -H "Authorization: Bearer $TOKEN" \
+            http://127.0.0.1:8040/protected/profile \
+            -o /tmp/a4-evidence/reuse.json
+
+          python - <<'PY'
+          from pathlib import Path
+
+          def status(path):
+              return int(Path(path).read_text().splitlines()[0].split()[1])
+
+          assert status('/tmp/a4-evidence/logout.headers') == 204
+          assert Path('/tmp/a4-evidence/logout.body').read_bytes() == b''
+          assert status('/tmp/a4-evidence/reuse.headers') == 401
+          print('A4_LOGOUT_204_AND_REUSE_401=PASS')
+          PY
+
+      - name: Capture Swagger bearer Try-it-out evidence
+        run: |
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+          mkdir -p /tmp/a4-evidence
+          python tools/swagger_evidence_server.py >> /tmp/a4-evidence/swagger-server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+
+          for attempt in {1..80}; do
+            if curl -fsS http://127.0.0.1:8040/docs >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.1
+          done
+
+          python - <<'PY'
+          from pathlib import Path
+          from playwright.sync_api import sync_playwright
+
+          out = Path('/tmp/a4-evidence/swagger-auth.png')
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              page = browser.new_page(viewport={"width": 1440, "height": 1100})
+              page.goto('http://127.0.0.1:8040/docs', wait_until='networkidle')
+
+              page.locator('button.authorize').first.click()
+              auth = page.locator('.auth-container')
+              auth.locator('input').fill('valid-token')
+              auth.locator('button.authorize').click()
+              page.locator('button.close-modal').click()
+
+              op = page.locator('.opblock').filter(has_text='/protected/profile').first
+              op.locator('.opblock-summary').click()
+              op.locator('button.try-out__btn').click()
+              op.locator('button.execute').click()
+              op.locator('.responses-table').get_by_text('200', exact=True).wait_for(timeout=15000)
+
+              page.screenshot(path=str(out), full_page=True)
+              assert out.stat().st_size > 10_000
+              browser.close()
+          print('A4_SWAGGER_BEARER_TRY_IT_OUT=PASS')
+          PY
+
+      - name: Upload curl and Swagger evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assignment-4-auth-evidence
+          path: |
+            /tmp/a4-evidence/
+          if-no-files-found: warn
