@@ -1,23 +1,26 @@
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .auth import get_auth_provider, get_bearer_token, get_current_user, require_admin
 from .config import get_settings
-from .models import AuthSessionResponse, Credentials, HealthResponse, MessageResponse
+from .models import AuthSessionResponse, Credentials, HealthResponse
 from .supabase import AuthProvider, SupabaseAuthError, SupabaseConfigurationError
 
 
 app = FastAPI(
     title="FlyRank Assignment 4 Auth",
     description=(
-        "Minimal signup, login, logout, and protected-route API. "
+        "Minimal signup, login, logout, public, and protected-route API. "
         "Supabase resolves the identity for every Bearer token."
     ),
-    version="1.0.0",
+    version="1.1.0",
 )
 app.add_middleware(
     CORSMiddleware,
@@ -26,6 +29,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"error": "Invalid request", "detail": exc.errors()},
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_error(_: Request, exc: HTTPException) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.detail},
+        headers=exc.headers,
+    )
 
 
 def _auth_response(payload: dict[str, Any]) -> AuthSessionResponse:
@@ -37,17 +57,27 @@ def _auth_response(payload: dict[str, Any]) -> AuthSessionResponse:
 
 
 def _provider_failure(exc: SupabaseAuthError, *, authentication: bool = False) -> HTTPException:
-    if authentication or exc.status_code in (401, 403):
-        return HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password.",
-        )
     if exc.status_code >= 500:
         return HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Supabase Auth is unavailable.",
         )
+    if authentication or exc.status_code in (401, 403):
+        return HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid login credentials",
+        )
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message)
+
+
+def _safe_user(user: Mapping[str, Any]) -> dict[str, Any]:
+    app_metadata = user.get("app_metadata")
+    role = app_metadata.get("role") if isinstance(app_metadata, Mapping) else None
+    return {
+        "id": user.get("id"),
+        "email": user.get("email"),
+        "role": role,
+    }
 
 
 @app.get("/healthz", response_model=HealthResponse, tags=["system"])
@@ -101,13 +131,11 @@ def login(
         ) from exc
 
 
-@app.post("/auth/logout", response_model=MessageResponse, tags=["auth"])
+@app.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT, tags=["auth"])
 def logout(
     access_token: str = Depends(get_bearer_token),
     provider: AuthProvider = Depends(get_auth_provider),
-) -> MessageResponse:
-    # Validate the token before revoking the session, so logout has the same
-    # 401 semantics as every other protected operation.
+) -> Response:
     try:
         provider.get_user(access_token)
         provider.sign_out(access_token)
@@ -115,7 +143,7 @@ def logout(
         if exc.status_code in (401, 403):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired access token.",
+                detail="Invalid or expired access token",
                 headers={"WWW-Authenticate": "Bearer"},
             ) from exc
         raise HTTPException(
@@ -127,17 +155,35 @@ def logout(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
-    return MessageResponse(message="Logged out.")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@app.get("/auth/me", tags=["protected"])
-def protected_me(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-    return {"user": user}
+@app.get("/public/info", tags=["public"])
+def public_info() -> dict[str, str]:
+    return {"message": "This route is public."}
+
+
+@app.get("/auth/me", include_in_schema=False)
+@app.get("/protected/profile", tags=["protected"])
+def protected_profile(
+    user: Mapping[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    return {"user": _safe_user(user)}
+
+
+@app.get("/protected/dashboard", tags=["protected"])
+def protected_dashboard(
+    user: Mapping[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    return {
+        "message": "Protected dashboard access granted.",
+        "user": _safe_user(user),
+    }
 
 
 @app.get("/auth/admin-check", tags=["protected"])
-def admin_check(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    return {"message": "Admin access granted.", "user": user}
+def admin_check(user: Mapping[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    return {"message": "Admin access granted.", "user": _safe_user(user)}
 
 
 frontend_dir = Path(__file__).resolve().parents[1] / "dist" / "public"
