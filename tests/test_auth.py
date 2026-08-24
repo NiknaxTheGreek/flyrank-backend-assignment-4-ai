@@ -16,6 +16,8 @@ class FakeAuthProvider:
     def sign_up(self, credentials: Mapping[str, str]) -> Mapping[str, Any]:
         if credentials["email"] == "taken@example.com":
             raise SupabaseAuthError("User already registered", 400)
+        if credentials["email"] == "outage@example.com":
+            raise SupabaseAuthError("Provider unavailable", 503)
         return {
             "access_token": "new-access-token",
             "refresh_token": "new-refresh-token",
@@ -23,6 +25,8 @@ class FakeAuthProvider:
         }
 
     def sign_in(self, credentials: Mapping[str, str]) -> Mapping[str, Any]:
+        if credentials["email"] == "outage@example.com":
+            raise SupabaseAuthError("Provider unavailable", 503)
         if credentials["password"] != "correct-password":
             raise SupabaseAuthError("Invalid login credentials", 400)
         return {
@@ -72,6 +76,21 @@ def test_signup_success(client: TestClient) -> None:
     )
     assert response.status_code == 201
     assert response.json()["access_token"] == "new-access-token"
+    assert response.json()["refresh_token"] == "new-refresh-token"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"password": "correct-password"},
+        {"email": "person@example.com"},
+        {},
+    ],
+)
+def test_signup_missing_credentials_are_400(client: TestClient, payload: dict[str, str]) -> None:
+    response = client.post("/auth/signup", json=payload)
+    assert response.status_code == 400
+    assert response.json()["error"] == "Invalid request"
 
 
 def test_signup_failure_is_bad_request(client: TestClient) -> None:
@@ -89,6 +108,21 @@ def test_login_success(client: TestClient) -> None:
     )
     assert response.status_code == 200
     assert response.json()["access_token"] == "valid-token"
+    assert response.json()["refresh_token"] == "refresh-token"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"password": "correct-password"},
+        {"email": "person@example.com"},
+        {},
+    ],
+)
+def test_login_missing_credentials_are_400(client: TestClient, payload: dict[str, str]) -> None:
+    response = client.post("/auth/login", json=payload)
+    assert response.status_code == 400
+    assert response.json()["error"] == "Invalid request"
 
 
 def test_login_invalid_credentials_are_unauthorized(client: TestClient) -> None:
@@ -97,6 +131,22 @@ def test_login_invalid_credentials_are_unauthorized(client: TestClient) -> None:
         json={"email": "person@example.com", "password": "wrong-password"},
     )
     assert response.status_code == 401
+    assert response.json() == {"error": "Invalid login credentials"}
+
+
+def test_login_provider_outage_is_503_not_401(client: TestClient) -> None:
+    response = client.post(
+        "/auth/login",
+        json={"email": "outage@example.com", "password": "correct-password"},
+    )
+    assert response.status_code == 503
+    assert response.json() == {"error": "Supabase Auth is unavailable."}
+
+
+def test_public_info_requires_no_token(client: TestClient) -> None:
+    response = client.get("/public/info")
+    assert response.status_code == 200
+    assert response.json() == {"message": "This route is public."}
 
 
 @pytest.mark.parametrize(
@@ -107,20 +157,38 @@ def test_missing_or_malformed_bearer_header_is_401(
     client: TestClient, authorization: str | None
 ) -> None:
     headers = {} if authorization is None else {"Authorization": authorization}
-    response = client.get("/auth/me", headers=headers)
+    response = client.get("/protected/profile", headers=headers)
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
 
 
-@pytest.mark.parametrize("token", ["invalid-token", "expired-token"])
-def test_invalid_or_expired_token_is_401(client: TestClient, token: str) -> None:
-    response = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+@pytest.mark.parametrize("token", ["invalid-token", "expired-token", "tampered-token"])
+def test_invalid_expired_or_tampered_token_is_401(client: TestClient, token: str) -> None:
+    response = client.get(
+        "/protected/profile",
+        headers={"Authorization": f"Bearer {token}"},
+    )
     assert response.status_code == 401
 
 
-def test_valid_token_reaches_protected_route(client: TestClient) -> None:
+def test_valid_token_reaches_profile_with_safe_metadata(client: TestClient) -> None:
     response = client.get(
-        "/auth/me",
+        "/protected/profile",
+        headers={"Authorization": "Bearer valid-token"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "user": {
+            "id": "user-123",
+            "email": "person@example.com",
+            "role": "member",
+        }
+    }
+
+
+def test_second_protected_route_reuses_guard(client: TestClient) -> None:
+    response = client.get(
+        "/protected/dashboard",
         headers={"Authorization": "Bearer valid-token"},
     )
     assert response.status_code == 200
@@ -143,24 +211,36 @@ def test_admin_user_can_reach_authorized_route(client: TestClient) -> None:
     assert response.status_code == 200
 
 
-def test_logout_validates_and_revokes_token(
+def test_logout_validates_revokes_and_returns_empty_204(
     client: TestClient, fake_provider: FakeAuthProvider
 ) -> None:
     response = client.post(
         "/auth/logout",
         headers={"Authorization": "Bearer valid-token"},
     )
-    assert response.status_code == 200
-    assert response.json() == {"message": "Logged out."}
+    assert response.status_code == 204
+    assert response.content == b""
     assert fake_provider.logged_out_tokens == ["valid-token"]
 
 
-def test_openapi_declares_bearer_security(client: TestClient) -> None:
+def test_logout_rejects_invalid_token(client: TestClient) -> None:
+    response = client.post(
+        "/auth/logout",
+        headers={"Authorization": "Bearer tampered-token"},
+    )
+    assert response.status_code == 401
+
+
+def test_openapi_declares_bearer_security_on_required_routes(client: TestClient) -> None:
     schema = client.get("/openapi.json").json()
     assert schema["components"]["securitySchemes"]["BearerAuth"] == {
         "type": "http",
         "scheme": "bearer",
     }
-    assert schema["paths"]["/auth/me"]["get"]["security"] == [
+    assert schema["paths"]["/protected/profile"]["get"]["security"] == [
         {"BearerAuth": []}
     ]
+    assert schema["paths"]["/protected/dashboard"]["get"]["security"] == [
+        {"BearerAuth": []}
+    ]
+    assert "security" not in schema["paths"]["/public/info"]["get"]
