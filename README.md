@@ -1,104 +1,82 @@
 # FlyRank Backend Assignment 4 — Auth: Login & Protect
 
-Minimal FastAPI authentication service backed by Supabase Auth. The service
-keeps the public auth flows small, resolves every presented Bearer token with
-Supabase's `/auth/v1/user` endpoint, and demonstrates the difference between
-authentication (`401`) and authorization (`403`).
+A FastAPI authentication service backed by Supabase Auth. The application delegates identity/password handling to Supabase, verifies every presented Bearer token with the provider, keeps authentication logic reusable, and exposes the public/protected route contract required by recovered S3.
 
-## Run locally
+## Required API surface
 
-The checked-in `.env.example` documents the live Supabase settings. Set
-`SUPABASE_PUBLISHABLE_KEY` for modern Supabase projects; the legacy
-`SUPABASE_ANON_KEY` remains supported as a fallback when no publishable key is
-provided. Keep real values in Replit Secrets or an ignored local `.env`; do not
-place them in source control.
+| Route | Auth | Required behavior |
+| --- | --- | --- |
+| `POST /auth/signup` | public | missing fields `400`; success `201` |
+| `POST /auth/login` | public | missing fields `400`; bad credentials `401`; success `200` with access + refresh tokens |
+| `POST /auth/logout` | Bearer | verified token; success `204` with empty body |
+| `GET /public/info` | public | accessible without a token |
+| `GET /protected/profile` | Bearer | valid verified identity required |
+| `GET /protected/dashboard` | Bearer | second route reusing the same auth dependency |
+| `GET /auth/admin-check` | Bearer + role | additional authorization example; authenticated non-admin receives `403` |
+
+`GET /auth/me` remains as a hidden compatibility alias for `/protected/profile` and is not part of the public OpenAPI contract.
+
+Missing/malformed Bearer headers and invalid/expired/tampered tokens return `401` with a Bearer challenge. A Supabase service outage is surfaced as `503` rather than being misreported as bad credentials.
+
+## Configuration
+
+Copy `.env.example` values into an ignored local `.env` or runtime secret store. Modern Supabase projects can use `SUPABASE_PUBLISHABLE_KEY`; `SUPABASE_ANON_KEY` remains supported as a compatibility fallback.
+
+Never commit real credentials.
+
+## Install and run
+
+Python 3.12+:
 
 ```bash
-# Install/sync the pinned dependencies
-uv sync
-pnpm install --frozen-lockfile
-
-# Run the local fake-backed tests
-uv run pytest tests -q
-
-# Run the web artifact (builds the React shell, then serves it from FastAPI)
-pnpm run dev
+python -m pip install .
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-When the web artifact is running, inspect:
-
-- `/docs` — Swagger UI with the `BearerAuth` lock control
-- `/openapi.json` — generated OpenAPI document
-- `/healthz` — reports whether Supabase settings are present without exposing them
-
-## API surface
-
-- `POST /auth/signup` — public Supabase signup
-- `POST /auth/login` — public password login
-- `POST /auth/logout` — validates and revokes the presented session
-- `GET /auth/me` — protected identity lookup
-- `GET /auth/admin-check` — protected example requiring `app_metadata.role=admin`
-
-Missing, malformed, invalid, and expired Bearer credentials return `401` with a
-Bearer challenge. An authenticated non-admin user reaches the authorization
-policy but receives `403`.
-
-## Verification evidence
-
-The complete evidence package, including explicit PASS statuses and the direct
-local Supabase/Auth results, is in
-[`VERIFICATION_EVIDENCE.md`](./VERIFICATION_EVIDENCE.md).
-
-### Replit automated suite
-
-The checked-in test suite uses a local fake provider and does not contact
-Supabase:
+Swagger UI is available at:
 
 ```text
-uv run pytest tests -q
+http://127.0.0.1:8000/docs
 ```
 
-Those tests cover signup success/failure, login success/invalid credentials,
-missing and malformed headers, invalid and expired tokens, valid protected
-access, authorization denial and success, logout, and the OpenAPI security
-declaration.
+Use the **Authorize** control with the access token returned by `/auth/login`, then call the protected routes through **Try it out**.
 
-The Replit automated suite passed **15 tests** using that fake provider, with
-one non-failing TestClient/HTTPX deprecation warning.
+## Automated verification
 
-### Genuine local Supabase runtime
+```bash
+python -m pytest -q
+```
 
-The genuine local runtime verification used the official Supabase CLI with a
-temporary `/tmp` project and a minimal Postgres, GoTrue/Auth, and Kong stack.
-The CLI health check was ignored because its Auth/Kong health classification was
-misleading even while the services were reachable. No hosted Supabase account
-or committed secrets were used.
+GitHub Actions run **32713258765** executed the current repaired branch and passed:
 
-Direct Supabase Auth results:
+- clean `pip install .`;
+- **26 tests passed**;
+- public route without authentication;
+- signup `201` and login `200`;
+- missing-field `400` behavior;
+- invalid/expired/tampered/malformed/missing credential `401` behavior;
+- reusable authentication on `/protected/profile` and `/protected/dashboard`;
+- non-admin authorization `403`;
+- logout `204` with an empty body and rejected token reuse;
+- provider-outage `503` behavior;
+- OpenAPI Bearer security declarations;
+- a real command-line `curl` lifecycle against the current FastAPI contract;
+- a browser-driven Swagger UI Bearer authorization + `/protected/profile` **Try it out** returning `200`.
 
-- settings → `200`
-- signup → `200`
-- password login → `200`
-- authenticated user lookup → `200`, with the same identity as signup/login
-- logout → `204`
-- settings after logout → `200`; Auth remained reachable
+The run printed:
 
-Application-level results:
+```text
+A4_CURL_AUTH_FLOW=PASS
+A4_LOGOUT_204_AND_REUSE_401=PASS
+A4_SWAGGER_BEARER_TRY_IT_OUT=PASS
+```
 
-- `GET /healthz` → `200`, with Supabase configured
-- `POST /auth/signup` → `201`
-- `POST /auth/login` → `200`
-- `GET /auth/me` with the returned Bearer token → `200`
-- Missing, malformed, and invalid Bearer tokens → `401`
-- Authenticated non-admin `GET /auth/admin-check` → `403`
-- `POST /auth/logout` → `200`
-- Reusing the token after logout → `401`
-- `GET /openapi.json` → `200`, with the `BearerAuth` HTTP bearer scheme
+The run uploaded the complete curl headers/bodies, server logs and the Swagger screenshot as GitHub Actions artifact **`assignment-4-auth-evidence` (artifact 9514918717)**. The screenshot visibly shows Swagger's protected-route lock and a successful `200` response for `/protected/profile` after Bearer authorization.
 
-The signup, login, and protected identity responses resolved to the same user.
+The browser/curl acceptance gate uses an explicit evidence-only dependency override so no secret is required in CI. It proves the current HTTP/OpenAPI contract. Separately, preserved genuine local Supabase CLI evidence verifies that the production provider path performs real signup/login/user lookup/logout against Supabase Auth. Those two evidence types are intentionally not conflated.
 
-### Separate preserved local AI artifact
+See [`VERIFICATION_EVIDENCE.md`](VERIFICATION_EVIDENCE.md) and [`REQUIREMENTS_AUDIT.md`](REQUIREMENTS_AUDIT.md) for the exact evidence boundary and S3 mapping.
 
-The separate preserved local AI artifact reported **23 tests passed**. This is
-not the Replit workspace's automated suite and is not being presented as
-additional local-Supabase runtime evidence.
+## AI Rematch boundary
+
+Recovered S3/S1 makes the Assignment 4 AI Rematch a separate project-required comparison stage after the human-led Assignment 4 implementation exists and is understood. This repository is the isolated AI-generated implementation; it does not claim that the later human-vs-AI comparison has already been completed.
