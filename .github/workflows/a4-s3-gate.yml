@@ -38,7 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/a4-evidence
-          python tools/swagger_evidence_server.py > /tmp/a4-evidence/server.log 2>&1 &
+          PYTHONPATH=. python tools/swagger_evidence_server.py > /tmp/a4-evidence/server.log 2>&1 &
           SERVER_PID=$!
           trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
 
@@ -130,7 +130,7 @@ jobs:
           python -m pip install playwright
           python -m playwright install --with-deps chromium
           mkdir -p /tmp/a4-evidence
-          python tools/swagger_evidence_server.py >> /tmp/a4-evidence/swagger-server.log 2>&1 &
+          PYTHONPATH=. python tools/swagger_evidence_server.py >> /tmp/a4-evidence/swagger-server.log 2>&1 &
           SERVER_PID=$!
           trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
 
